@@ -1,0 +1,36 @@
+services:
+  # Agar.io server
+  server:
+    build:
+      context: https://github.com/h4ks-com/h4kmally-server.git#main
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3001/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks:
+      - agar-net
+
+  # Terminal client (optional - for containerized testing)
+  client:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      server:
+        condition: service_healthy
+    environment:
+      - TERM=xterm-256color
+    command: ["-server", "ws://server:3001/ws/", "-name", "DockerPlayer"]
+    networks:
+      - agar-net
+    stdin_open: true
+    tty: true
+
+networks:
+  agar-net:
