@@ -4,7 +4,6 @@ package client
 import (
 	"crypto/tls"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -27,7 +26,7 @@ type Client struct {
 	proto *protocol.Protocol
 	url   string
 	mu    sync.Mutex
-	msgs  chan []byte
+	msgs  chan interface{}
 	done  chan struct{}
 }
 
@@ -36,7 +35,7 @@ func New(url string) *Client {
 	return &Client{
 		proto: protocol.New(),
 		url:   url,
-		msgs:  make(chan []byte, 100),
+		msgs:  make(chan interface{}, 100),
 		done:  make(chan struct{}),
 	}
 }
@@ -55,15 +54,12 @@ func (c *Client) Connect() tea.Cmd {
 				InsecureSkipVerify: false,
 			},
 		}
-		
-		fmt.Fprintf(os.Stderr, "[DEBUG] Dialing %s...\n", c.url)
+
 		conn, _, err := dialer.Dial(c.url, nil)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "[ERROR] Dial failed: %v\n", err)
 			return DisconnectedMsg{Err: fmt.Errorf("dial failed: %w", err)}
 		}
-		fmt.Fprintf(os.Stderr, "[DEBUG] Connected! Sending handshake...\n")
-		
+
 		c.conn = conn
 		if err := conn.WriteMessage(websocket.BinaryMessage, c.proto.Handshake()); err != nil {
 			conn.Close()
@@ -83,11 +79,25 @@ func (c *Client) readLoop() {
 		default:
 			_, data, err := c.conn.ReadMessage()
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "[DEBUG] Read error: %v\n", err)
-				c.msgs <- nil
+				c.msgs <- DisconnectedMsg{Err: err}
 				return
 			}
-			c.msgs <- data
+
+			if !c.proto.IsReady() {
+				ver, err := c.proto.ProcessHandshake(data)
+				if err != nil {
+					c.msgs <- DisconnectedMsg{Err: err}
+					return
+				}
+				c.msgs <- HandshakeDoneMsg{Version: ver}
+				continue
+			}
+
+			msg, err := c.proto.DecodeMessage(data)
+			if err != nil {
+				continue // Skip decode errors
+			}
+			c.msgs <- ServerMsg{Msg: msg}
 		}
 	}
 }
@@ -95,24 +105,11 @@ func (c *Client) readLoop() {
 // Read waits for next message
 func (c *Client) Read() tea.Cmd {
 	return func() tea.Msg {
-		data, ok := <-c.msgs
-		if !ok || data == nil {
-			return DisconnectedMsg{Err: fmt.Errorf("connection closed")}
+		msg, ok := <-c.msgs
+		if !ok {
+			return DisconnectedMsg{}
 		}
-		if !c.proto.IsReady() {
-			ver, err := c.proto.ProcessHandshake(data)
-			if err != nil {
-				return DisconnectedMsg{Err: fmt.Errorf("handshake failed: %w", err)}
-			}
-			fmt.Fprintf(os.Stderr, "[DEBUG] Handshake complete: %s\n", ver)
-			return HandshakeDoneMsg{Version: ver}
-		}
-		msg, err := c.proto.DecodeMessage(data)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "[DEBUG] Decode error: %v\n", err)
-			return nil
-		}
-		return ServerMsg{Msg: msg}
+		return msg
 	}
 }
 
