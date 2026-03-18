@@ -3,8 +3,8 @@ package tui
 
 import (
 	"fmt"
-	"os"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"tui-agar/internal/client"
@@ -24,12 +24,14 @@ const (
 
 // Model is the app state
 type Model struct {
-	world  *game.World
-	client *client.Client
-	w, h   int
-	state  state
-	name   string
-	err    error
+	world     *game.World
+	client    *client.Client
+	w, h      int
+	state     state
+	name      string
+	err       error
+	connected bool
+	msgCount  int
 }
 
 // New creates the model
@@ -39,36 +41,72 @@ func New(url, name string) Model {
 		client: client.New(url),
 		name:   name,
 		state:  stateConnecting,
+		w:      80,
+		h:      24,
 	}
 }
 
 // Init starts the app
 func (m Model) Init() tea.Cmd {
-	fmt.Fprintf(os.Stderr, "[DEBUG] Connecting to %s...\n", m.client.URL())
-	return m.client.Connect()
+	return tea.Batch(
+		m.client.Connect(),
+		tick(),
+	)
 }
+
+func tick() tea.Cmd {
+	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg {
+		return tickMsg{}
+	})
+}
+
+type tickMsg struct{}
 
 // Update handles messages
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tickMsg:
+		// Keep ticking for rendering updates
+		return m, tick()
+
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+
 	case tea.MouseMsg:
 		return m.handleMouse(msg)
+
 	case tea.WindowSizeMsg:
 		m.w, m.h = msg.Width, msg.Height
 		return m, nil
+
 	case client.ConnectedMsg:
+		m.connected = true
 		m.state = stateHandshake
 		return m, m.client.Read()
+
 	case client.HandshakeDoneMsg:
-		return m, tea.Batch(m.client.Captcha("skip"), m.client.Spawn(m.name), m.client.Read())
+		m.state = stateHandshake
+		return m, tea.Batch(
+			m.client.Captcha("skip"),
+			m.client.Spawn(m.name),
+			m.client.Read(),
+		)
+
 	case client.ServerMsg:
-		return m.handleServer(msg)
+		m.msgCount++
+		m.handleServer(msg)
+		return m, m.client.Read()
+
 	case client.DisconnectedMsg:
-		m.err = msg.Err
-		m.state = stateError
-		return m, tea.Quit
+		if m.err == nil && msg.Err != nil {
+			m.err = msg.Err
+		}
+		if m.err != nil {
+			m.state = stateError
+			return m, tea.Quit
+		}
+		// Nil error means normal close, try to stay alive
+		return m, nil
 	}
 	return m, nil
 }
@@ -105,12 +143,15 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return m, m.client.Move(wx-px, wy-py)
 }
 
-func (m Model) handleServer(msg client.ServerMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleServer(msg client.ServerMsg) {
 	switch v := msg.Msg.(type) {
 	case protocol.BorderMsg:
 		m.world.SetBorder(v.Left, v.Top, v.Right, v.Bottom)
 	case protocol.CameraMsg:
 		m.world.SetCamera(v.X, v.Y, v.Zoom)
+		if m.state == stateHandshake {
+			m.state = statePlaying
+		}
 	case protocol.WorldUpdateMsg:
 		for _, c := range v.AddCells {
 			m.world.AddCell(c.ID, c.X, c.Y, c.Radius, c.Color, c.Name, c.Skin)
@@ -120,6 +161,8 @@ func (m Model) handleServer(msg client.ServerMsg) (tea.Model, tea.Cmd) {
 		}
 		if m.world.IsAlive() {
 			m.state = statePlaying
+		} else if m.state == statePlaying {
+			m.state = stateDead
 		}
 	case uint32:
 		m.world.AddMyCell(v)
@@ -129,52 +172,33 @@ func (m Model) handleServer(msg client.ServerMsg) (tea.Model, tea.Cmd) {
 			m.state = statePlaying
 		}
 	}
-	return m, m.client.Read()
 }
 
 // View renders the UI
 func (m Model) View() tea.View {
 	var content string
-	
+
 	switch m.state {
 	case stateConnecting:
-		content = "Connecting to server..."
-		if m.w > 0 {
-			content = m.center("Connecting...")
-		}
+		content = m.center("Connecting...")
 	case stateHandshake:
-		content = "Spawning..."
-		if m.w > 0 {
-			content = m.center("Spawning...")
-		}
+		content = m.center(fmt.Sprintf("Spawning as %s...", m.name))
 	case stateDead:
-		if m.w > 0 {
-			content = m.center("You died!\n\nPress R to respawn")
-		} else {
-			content = "You died! Press R to respawn"
-		}
+		content = m.center("You died!\n\nPress R to respawn")
 	case stateError:
 		e := "Disconnected"
 		if m.err != nil {
 			e = fmt.Sprintf("Error: %v", m.err)
 		}
-		if m.w > 0 {
-			content = m.center(e)
-		} else {
-			content = e + "\n"
-		}
+		content = m.center(e)
 	case statePlaying:
-		if m.w > 0 && m.h > 0 {
-			content = m.renderGame()
-		} else {
-			content = "Loading game..."
-		}
+		content = m.renderGame()
 	}
-	
+
 	v := tea.NewView(content)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
-	v.WindowTitle = "h4kmally-tui"
+	v.WindowTitle = fmt.Sprintf("h4kmally-tui - %s", m.name)
 	return v
 }
 
@@ -203,16 +227,21 @@ func (m Model) renderGame() string {
 			buf[i][j] = ' '
 		}
 	}
+
+	// Render cells
 	for _, c := range m.world.VisibleCells(m.w, m.h) {
 		m.renderCell(buf, c)
 	}
-	// HUD
+
+	// HUD - Top left: Score
 	score := fmt.Sprintf("Score: %d", m.world.Score())
 	for i, ch := range score {
 		if i < m.w {
 			buf[0][i] = ch
 		}
 	}
+
+	// HUD - Top right: Cell count
 	cells := fmt.Sprintf("Cells: %d", len(m.world.MyCells))
 	start := m.w - len(cells) - 1
 	for i, ch := range cells {
@@ -220,13 +249,16 @@ func (m Model) renderGame() string {
 			buf[0][start+i] = ch
 		}
 	}
-	help := "[Mouse:Move] [Space:Split] [W:Eject] [Q:Quit]"
+
+	// HUD - Bottom: Controls
+	help := "[Mouse:Move] [Space:Split] [W:Eject] [R:Respawn] [Q:Quit]"
 	start = (m.w - len(help)) / 2
 	for i, ch := range help {
 		if start+i >= 0 && start+i < m.w && m.h > 1 {
 			buf[m.h-1][start+i] = ch
 		}
 	}
+
 	var b strings.Builder
 	for _, row := range buf {
 		b.WriteString(string(row))
@@ -241,6 +273,7 @@ func (m Model) renderCell(buf [][]rune, c *game.Cell) {
 	if sr < 1 {
 		sr = 1
 	}
+
 	ch := '●'
 	if sr < 2 {
 		ch = '·'
@@ -254,6 +287,7 @@ func (m Model) renderCell(buf [][]rune, c *game.Cell) {
 	if c.IsMine {
 		ch = '◉'
 	}
+
 	for dy := -sr; dy <= sr; dy++ {
 		for dx := -sr; dx <= sr; dx++ {
 			if dx*dx+dy*dy <= sr*sr {
