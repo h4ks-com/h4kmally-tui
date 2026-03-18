@@ -2,8 +2,11 @@
 package client
 
 import (
-	"log"
+	"crypto/tls"
+	"fmt"
+	"os"
 	"sync"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/gorilla/websocket"
@@ -38,15 +41,34 @@ func New(url string) *Client {
 	}
 }
 
+// URL returns the server URL
+func (c *Client) URL() string {
+	return c.url
+}
+
 // Connect starts connection
 func (c *Client) Connect() tea.Cmd {
 	return func() tea.Msg {
-		conn, _, err := websocket.DefaultDialer.Dial(c.url, nil)
-		if err != nil {
-			return DisconnectedMsg{Err: err}
+		dialer := websocket.Dialer{
+			HandshakeTimeout: 10 * time.Second,
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: false,
+			},
 		}
+		
+		fmt.Fprintf(os.Stderr, "[DEBUG] Dialing %s...\n", c.url)
+		conn, _, err := dialer.Dial(c.url, nil)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[ERROR] Dial failed: %v\n", err)
+			return DisconnectedMsg{Err: fmt.Errorf("dial failed: %w", err)}
+		}
+		fmt.Fprintf(os.Stderr, "[DEBUG] Connected! Sending handshake...\n")
+		
 		c.conn = conn
-		conn.WriteMessage(websocket.BinaryMessage, c.proto.Handshake())
+		if err := conn.WriteMessage(websocket.BinaryMessage, c.proto.Handshake()); err != nil {
+			conn.Close()
+			return DisconnectedMsg{Err: fmt.Errorf("handshake send failed: %w", err)}
+		}
 		go c.readLoop()
 		return ConnectedMsg{}
 	}
@@ -61,6 +83,7 @@ func (c *Client) readLoop() {
 		default:
 			_, data, err := c.conn.ReadMessage()
 			if err != nil {
+				fmt.Fprintf(os.Stderr, "[DEBUG] Read error: %v\n", err)
 				c.msgs <- nil
 				return
 			}
@@ -74,18 +97,19 @@ func (c *Client) Read() tea.Cmd {
 	return func() tea.Msg {
 		data, ok := <-c.msgs
 		if !ok || data == nil {
-			return DisconnectedMsg{}
+			return DisconnectedMsg{Err: fmt.Errorf("connection closed")}
 		}
 		if !c.proto.IsReady() {
 			ver, err := c.proto.ProcessHandshake(data)
 			if err != nil {
-				return DisconnectedMsg{Err: err}
+				return DisconnectedMsg{Err: fmt.Errorf("handshake failed: %w", err)}
 			}
+			fmt.Fprintf(os.Stderr, "[DEBUG] Handshake complete: %s\n", ver)
 			return HandshakeDoneMsg{Version: ver}
 		}
 		msg, err := c.proto.DecodeMessage(data)
 		if err != nil {
-			log.Printf("decode: %v", err)
+			fmt.Fprintf(os.Stderr, "[DEBUG] Decode error: %v\n", err)
 			return nil
 		}
 		return ServerMsg{Msg: msg}
