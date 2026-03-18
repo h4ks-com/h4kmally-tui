@@ -216,6 +216,11 @@ func (p *Protocol) decodeWorldUpdate(d []byte) (WorldUpdateMsg, error) {
 	for offset < len(d) {
 		cell, n, err := p.decodeCell(d[offset:])
 		if err != nil {
+			// Stop parsing on error, return what we have
+			break
+		}
+		if n <= 0 {
+			// Safety check
 			break
 		}
 		msg.AddCells = append(msg.AddCells, cell)
@@ -226,20 +231,44 @@ func (p *Protocol) decodeWorldUpdate(d []byte) (WorldUpdateMsg, error) {
 
 func (p *Protocol) decodeCell(d []byte) (Cell, int, error) {
 	if len(d) < 15 {
-		return Cell{}, 0, fmt.Errorf("too short")
+		return Cell{}, 0, fmt.Errorf("too short: %d bytes", len(d))
 	}
 	c := Cell{}
 	off := 0
+	
+	if off+4 > len(d) {
+		return Cell{}, 0, fmt.Errorf("unexpected end reading ID")
+	}
 	c.ID = binary.LittleEndian.Uint32(d[off : off+4])
 	off += 4
+	
+	if off+4 > len(d) {
+		return Cell{}, 0, fmt.Errorf("unexpected end reading X")
+	}
 	c.X = math.Float32frombits(binary.LittleEndian.Uint32(d[off : off+4]))
 	off += 4
+	
+	if off+4 > len(d) {
+		return Cell{}, 0, fmt.Errorf("unexpected end reading Y")
+	}
 	c.Y = math.Float32frombits(binary.LittleEndian.Uint32(d[off : off+4]))
 	off += 4
+	
+	if off+4 > len(d) {
+		return Cell{}, 0, fmt.Errorf("unexpected end reading Radius")
+	}
 	c.Radius = math.Float32frombits(binary.LittleEndian.Uint32(d[off : off+4]))
 	off += 4
+	
+	if off >= len(d) {
+		return Cell{}, 0, fmt.Errorf("unexpected end reading Color")
+	}
 	c.Color = d[off]
 	off++
+	
+	if off >= len(d) {
+		return Cell{}, 0, fmt.Errorf("unexpected end reading Flags")
+	}
 	flags := d[off]
 	off++
 
@@ -248,6 +277,9 @@ func (p *Protocol) decodeCell(d []byte) (Cell, int, error) {
 		for end < len(d) && d[end] != 0 {
 			end++
 		}
+		if end >= len(d) {
+			return Cell{}, 0, fmt.Errorf("unexpected end reading Name")
+		}
 		c.Name = string(d[off:end])
 		off = end + 1
 	}
@@ -255,6 +287,9 @@ func (p *Protocol) decodeCell(d []byte) (Cell, int, error) {
 		end := off
 		for end < len(d) && d[end] != 0 {
 			end++
+		}
+		if end >= len(d) {
+			return Cell{}, 0, fmt.Errorf("unexpected end reading Skin")
 		}
 		c.Skin = string(d[off:end])
 		off = end + 1
