@@ -2,14 +2,13 @@
 
 Terminal agar.io client built with Go and Bubble Tea v2. Connects to [h4kmally-server](https://github.com/h4ks-com/h4kmally-server).
 
-![Demo](https://via.placeholder.com/600x400?text=Terminal+agar.io)
-
 ## Features
 
 - 🎮 Full agar.io gameplay in your terminal
 - 🖱️ Mouse-based movement
 - ⚡ Real-time WebSocket protocol (SIG 0.0.1)
 - 🎨 Unicode cell rendering with size indicators
+- 🔒 WSS (secure WebSocket) support
 - 🐳 Docker Compose for easy testing
 
 ## Installation
@@ -26,7 +25,7 @@ go build -o h4kmally-tui ./cmd/tui-agar
 
 ```bash
 docker build -t h4kmally-tui .
-docker run -it --rm h4kmally-tui -server ws://your-server:3001/ws/ -name Player
+docker run -it --rm h4kmally-tui -server wss://your-server/ws/ -name Player
 ```
 
 ## Quick Start
@@ -38,8 +37,8 @@ docker compose up -d server
 # Run the client
 ./h4kmally-tui -name YourName
 
-# Connect to a custom server
-./h4kmally-tui -server ws://your-server:3001/ws/ -name YourName
+# Connect to a custom server (note the trailing slash!)
+./h4kmally-tui -server wss://api.sigmally.h4ks.com/ws/ -name YourName
 ```
 
 ## Controls
@@ -51,6 +50,13 @@ docker compose up -d server
 | **W** | Eject mass |
 | **R** | Respawn (when dead) |
 | **Q** | Quit |
+
+## Testing
+
+```bash
+# Test connection without TUI
+go run ./cmd/test-client -server wss://api.sigmally.h4ks.com/ws/ -name TestBot
+```
 
 ## Cell Rendering
 
