@@ -1,8 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"flag"
-	"fmt"
+	"log"
 	"os"
 	"time"
 
@@ -13,25 +14,59 @@ import (
 func main() {
 	server := flag.String("server", "ws://localhost:3001/ws/", "WebSocket server URL")
 	name := flag.String("name", "Player", "Player name")
-	verbose := flag.Bool("v", false, "Verbose output")
+	test := flag.Bool("test", false, "Run in test mode (no TTY)")
 	flag.Parse()
 
-	if *verbose {
-		fmt.Fprintf(os.Stderr, "Connecting to %s as %s...\n", *server, *name)
+	// Log to file for debugging
+	logFile, err := os.Create("/tmp/agar-debug.log")
+	if err != nil {
+		log.Fatalf("Cannot create log: %v", err)
 	}
+	defer logFile.Close()
+	log.SetOutput(logFile)
+
+	log.Printf("Starting client: server=%s name=%s test=%v", *server, *name, *test)
 
 	m := tui.New(*server, *name)
-	
-	// Run with options for better terminal handling
-	p := tea.NewProgram(m,
-		tea.WithWindowSize(80, 24), // Default size if not detected
-	)
 
-	if _, err := p.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		
-		// Give time to see the error
-		time.Sleep(2 * time.Second)
-		os.Exit(1)
+	var p *tea.Program
+	if *test {
+		// Test mode: run without TTY
+		p = tea.NewProgram(m,
+			tea.WithWindowSize(80, 24),
+			tea.WithInput(bytes.NewReader(nil)),
+			tea.WithOutput(os.Stderr),
+		)
+	} else {
+		// Normal mode: use real terminal
+		p = tea.NewProgram(m,
+			tea.WithWindowSize(80, 24),
+		)
+	}
+
+	log.Printf("Running program...")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := p.Run()
+		done <- err
+	}()
+
+	// Wait for completion or timeout
+	select {
+	case err := <-done:
+		if err != nil {
+			log.Printf("Program error: %v", err)
+			if !*test {
+				os.Exit(1)
+			}
+		} else {
+			log.Printf("Program exited normally")
+		}
+	case <-time.After(10 * time.Second):
+		log.Printf("Timeout - sending quit")
+		p.Quit()
+		<-done
+		log.Printf("Quit complete")
 	}
 }
