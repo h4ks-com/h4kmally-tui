@@ -88,11 +88,10 @@ func (w *World) RemoveMyCell(id uint32) {
 // SetCamera updates camera
 func (w *World) SetCamera(x, y, zoom float32) {
 	w.CamX, w.CamY = x, y
-	// Prevent division by zero
 	if zoom > 0.001 {
 		w.CamZoom = zoom
 	} else {
-		w.CamZoom = 0.1 // Default zoom
+		w.CamZoom = 0.1
 	}
 }
 
@@ -122,11 +121,11 @@ func (w *World) Center() (float32, float32) {
 }
 
 // Score returns total mass
-func (w *World) Score() uint32 {
-	var t uint32
+func (w *World) Score() int {
+	var t int
 	for _, id := range w.MyCells {
 		if c, ok := w.Cells[id]; ok {
-			t += uint32(c.Radius * c.Radius)
+			t += int(c.Radius * c.Radius)
 		}
 	}
 	return t
