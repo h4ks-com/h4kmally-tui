@@ -87,7 +87,13 @@ func (w *World) RemoveMyCell(id uint32) {
 
 // SetCamera updates camera
 func (w *World) SetCamera(x, y, zoom float32) {
-	w.CamX, w.CamY, w.CamZoom = x, y, zoom
+	w.CamX, w.CamY = x, y
+	// Prevent division by zero
+	if zoom > 0.001 {
+		w.CamZoom = zoom
+	} else {
+		w.CamZoom = 0.1 // Default zoom
+	}
 }
 
 // SetBorder updates boundaries
