@@ -3,6 +3,7 @@ package tui
 
 import (
 	"fmt"
+	"os"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -37,11 +38,15 @@ func New(url, name string) Model {
 		world:  game.NewWorld(),
 		client: client.New(url),
 		name:   name,
+		state:  stateConnecting,
 	}
 }
 
 // Init starts the app
-func (m Model) Init() tea.Cmd { return m.client.Connect() }
+func (m Model) Init() tea.Cmd {
+	fmt.Fprintf(os.Stderr, "[DEBUG] Connecting to %s...\n", m.client.URL())
+	return m.client.Connect()
+}
 
 // Update handles messages
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -129,30 +134,47 @@ func (m Model) handleServer(msg client.ServerMsg) (tea.Model, tea.Cmd) {
 
 // View renders the UI
 func (m Model) View() tea.View {
-	if m.w == 0 {
-		return tea.NewView("Loading...")
-	}
 	var content string
+	
 	switch m.state {
 	case stateConnecting:
-		content = m.center("Connecting...")
+		content = "Connecting to server..."
+		if m.w > 0 {
+			content = m.center("Connecting...")
+		}
 	case stateHandshake:
-		content = m.center("Spawning...")
+		content = "Spawning..."
+		if m.w > 0 {
+			content = m.center("Spawning...")
+		}
 	case stateDead:
-		content = m.center("You died!\n\nPress R to respawn")
+		if m.w > 0 {
+			content = m.center("You died!\n\nPress R to respawn")
+		} else {
+			content = "You died! Press R to respawn"
+		}
 	case stateError:
 		e := "Disconnected"
 		if m.err != nil {
 			e = fmt.Sprintf("Error: %v", m.err)
 		}
-		content = m.center(e)
+		if m.w > 0 {
+			content = m.center(e)
+		} else {
+			content = e + "\n"
+		}
 	case statePlaying:
-		content = m.renderGame()
+		if m.w > 0 && m.h > 0 {
+			content = m.renderGame()
+		} else {
+			content = "Loading game..."
+		}
 	}
+	
 	v := tea.NewView(content)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
-	v.WindowTitle = "tui-agar"
+	v.WindowTitle = "h4kmally-tui"
 	return v
 }
 
