@@ -485,11 +485,13 @@ func (m Model) renderGame() string {
 			}
 			b.WriteRune(px.ch)
 		}
-		if colorActive || bgActive {
-			b.WriteString("\x1b[0m")
-		}
-		b.WriteByte('\n')
+		// Reset + erase to end of line: clears any content past m.w columns
+		// (e.g. when the SSH terminal is wider than the game viewport).
+		b.WriteString("\x1b[0m\x1b[K\n")
 	}
+	// Erase from cursor to end of screen: clears rows below m.h if the
+	// terminal is taller than the game viewport.
+	b.WriteString("\x1b[J")
 	return b.String()
 }
 
@@ -762,7 +764,7 @@ func cellChar(sr int, isMine bool) rune {
 	case sr < 8:
 		return '○'
 	case sr >= 12:
-		return '⬤'
+		return '●'
 	default:
 		return '●'
 	}
