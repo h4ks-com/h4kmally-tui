@@ -34,16 +34,19 @@ func init() {
 }
 
 type Model struct {
-	world     *game.World
-	client    *client.Client
-	w, h      int
-	state     state
-	name      string
-	err       error
-	connected bool
-	msgCount  int
+	world        *game.World
+	client       *client.Client
+	w, h         int
+	state        state
+	name         string
+	err          error
+	connected    bool
+	msgCount     int
 	mouseScreenX int
 	mouseScreenY int
+	chatMode     bool
+	chatInput    string
+	chatMessages []ChatMessage
 }
 
 func New(url, name string) Model {
@@ -80,6 +83,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			wx, wy := m.world.ToWorld(float32(m.mouseScreenX), float32(m.mouseScreenY), float32(m.w), float32(m.h))
 			cmds = append(cmds, m.client.Move(int32(wx), int32(wy)))
 		}
+		now := time.Now()
+		n := 0
+		for _, cm := range m.chatMessages {
+			if now.Sub(cm.At) < time.Minute {
+				m.chatMessages[n] = cm
+				n++
+			}
+		}
+		m.chatMessages = m.chatMessages[:n]
 		return m, tea.Batch(cmds...)
 
 	case tea.KeyPressMsg:
@@ -124,6 +136,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.chatMode {
+		switch msg.String() {
+		case "enter":
+			if m.chatInput != "" {
+				cmd := m.client.Chat(m.chatInput)
+				m.chatInput = ""
+				m.chatMode = false
+				return m, cmd
+			}
+			m.chatMode = false
+		case "esc":
+			m.chatInput = ""
+			m.chatMode = false
+		case "backspace":
+			if len(m.chatInput) > 0 {
+				m.chatInput = m.chatInput[:len(m.chatInput)-1]
+			}
+		default:
+			s := msg.String()
+			if len(s) == 1 && s[0] >= 32 && len(m.chatInput) < 100 {
+				m.chatInput += s
+			}
+		}
+		return m, nil
+	}
+
 	switch msg.String() {
 	case "ctrl+c", "q":
 		m.client.Close()
@@ -140,6 +178,10 @@ func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.state == stateDead {
 			m.state = stateHandshake
 			return m, tea.Batch(m.client.Spawn(m.name), m.client.Read())
+		}
+	case "enter":
+		if m.state == statePlaying {
+			m.chatMode = true
 		}
 	}
 	return m, nil
@@ -167,7 +209,7 @@ func (m *Model) handleServer(msg client.ServerMsg) tea.Cmd {
 
 	case protocol.WorldUpdateMsg:
 		for _, c := range v.AddCells {
-			m.world.AddCell(c.ID, c.X, c.Y, c.Size, c.R, c.G, c.B, c.Name, c.Skin)
+			m.world.AddCell(c.ID, c.X, c.Y, c.Size, c.R, c.G, c.B, c.Name, c.Skin, c.IsVirus)
 		}
 		for _, id := range v.RemoveIDs {
 			m.world.RemoveCell(id)
@@ -212,6 +254,12 @@ func (m *Model) handleServer(msg client.ServerMsg) tea.Cmd {
 				IsSubscriber: e.IsSubscriber,
 			}
 		}
+
+	case protocol.ChatMsg:
+		m.chatMessages = append(m.chatMessages, ChatMessage{
+			Name: v.Name, R: v.R, G: v.G, B: v.B,
+			Text: v.Text, At: time.Now(),
+		})
 
 	case protocol.PingReplyMsg:
 		return m.client.Ping()
@@ -263,6 +311,14 @@ func (m Model) center(text string) string {
 	return b.String()
 }
 
+// ChatMessage holds a received chat message with display metadata
+type ChatMessage struct {
+	Name    string
+	R, G, B uint8
+	Text    string
+	At      time.Time
+}
+
 // pixel holds one terminal cell's content and color
 type pixel struct {
 	ch             rune
@@ -295,13 +351,17 @@ func (m Model) renderGame() string {
 		if sr < 1 {
 			sr = 1
 		}
+		cr, cg, cb := c.R, c.G, c.B
+		if !c.IsVirus {
+			cr, cg, cb = avoidVirusGreen(cr, cg, cb)
+		}
 		ch := cellChar(sr, c.IsMine)
 		for dy := -sr; dy <= sr; dy++ {
 			for dx := -sr; dx <= sr; dx++ {
 				if dx*dx+dy*dy <= sr*sr {
 					px, py := sx+dx, sy+dy
 					if py >= 0 && py < h && px >= 0 && px < w {
-						buf[py][px] = pixel{ch: ch, r: c.R, g: c.G, b: c.B, hasColor: true}
+						buf[py][px] = pixel{ch: ch, r: cr, g: cg, b: cb, hasColor: true}
 					}
 				}
 			}
@@ -341,12 +401,13 @@ func (m Model) renderGame() string {
 	m.stampBorder(buf, w, h, zoom)
 	m.stampLeaderboard(buf, w)
 	m.stampMinimap(buf, w)
+	m.stampChat(buf, w)
 
 	// HUD: score top-left, cells count
 	writeHUD(buf, w, m.world.Score(), len(m.world.MyCells))
 
 	// Help bar at bottom
-	help := "[Mouse] [Space:Split] [W:Eject] [R:Respawn] [Q:Quit]"
+	help := "[Mouse] [Space:Split] [W:Eject] [R:Respawn] [Enter:Chat] [Q:Quit]"
 	if len(help) < w {
 		start := (w - len(help)) / 2
 		for i, ch := range help {
@@ -571,6 +632,79 @@ func (m Model) stampMinimap(buf [][]pixel, w int) {
 			setPixel(buf, r, c+2, m.h, w, pixel{ch: ' ', r: fr, g: fg, b: fb, hasColor: true})
 		}
 	}
+}
+
+// stampChat draws the chat history and input row in the bottom-left corner.
+func (m Model) stampChat(buf [][]pixel, w int) {
+	const maxMsgs = 5
+	const chatW = 48
+
+	now := time.Now()
+	recent := make([]ChatMessage, 0, maxMsgs)
+	for _, cm := range m.chatMessages {
+		if now.Sub(cm.At) < time.Minute {
+			recent = append(recent, cm)
+		}
+	}
+	if len(recent) > maxMsgs {
+		recent = recent[len(recent)-maxMsgs:]
+	}
+
+	// Row above the help bar is reserved for the input hint / active input
+	hintRow := m.h - 2
+	msgsStartRow := hintRow - len(recent)
+
+	for i, cm := range recent {
+		row := msgsStartRow + i
+		if row < 0 || row >= m.h {
+			continue
+		}
+		nameLabel := cm.Name + ": "
+		full := nameLabel + cm.Text
+		if len(full) > chatW {
+			full = full[:chatW]
+		}
+		for j, ch := range full {
+			var r, g, b uint8
+			bold := false
+			if j < len(nameLabel) {
+				r, g, b = cm.R, cm.G, cm.B
+				bold = true
+			} else {
+				r, g, b = 210, 210, 210
+			}
+			setPixel(buf, row, j, m.h, w, pixel{ch: ch, r: r, g: g, b: b, hasColor: true, bold: bold})
+		}
+	}
+
+	if m.chatMode {
+		input := "> " + m.chatInput + "█"
+		if len(input) > chatW {
+			input = input[:chatW]
+		}
+		for i, ch := range input {
+			setPixel(buf, hintRow, i, m.h, w, pixel{
+				ch: ch, r: 255, g: 220, b: 80, hasColor: true, bold: true,
+				bgR: 15, bgG: 15, bgB: 15, hasBg: true,
+			})
+		}
+	} else {
+		hint := "↵ chat"
+		for i, ch := range hint {
+			setPixel(buf, hintRow, i, m.h, w, pixel{ch: ch, r: 70, g: 70, b: 70, hasColor: true})
+		}
+	}
+}
+
+// avoidVirusGreen remaps green-dominant colors on non-virus cells.
+// Viruses are always green, so player/food cells that happen to have a
+// green-dominant server color would be visually indistinguishable from viruses.
+// A 120° hue rotation (R,G,B)→(B,R,G) moves green→blue while preserving saturation.
+func avoidVirusGreen(r, g, b uint8) (uint8, uint8, uint8) {
+	if int(g) > int(r)+60 && int(g) > int(b)+60 && g > 100 {
+		return b, r, g
+	}
+	return r, g, b
 }
 
 func setPixel(buf [][]pixel, row, col, h, w int, p pixel) {

@@ -79,7 +79,7 @@ func TestScreenRadius(t *testing.T) {
 
 func TestAddCell(t *testing.T) {
 	w := NewWorld()
-	w.AddCell(1, 100, -50, 80, 255, 128, 0, "alice", "")
+	w.AddCell(1, 100, -50, 80, 255, 128, 0, "alice", "", false)
 
 	c := w.Cells[1]
 	if c == nil {
@@ -98,8 +98,8 @@ func TestAddCell(t *testing.T) {
 
 func TestAddCellUpdatesExisting(t *testing.T) {
 	w := NewWorld()
-	w.AddCell(1, 0, 0, 50, 255, 0, 0, "bob", "")
-	w.AddCell(1, 200, 100, 120, 0, 255, 0, "", "") // update, no new name
+	w.AddCell(1, 0, 0, 50, 255, 0, 0, "bob", "", false)
+	w.AddCell(1, 200, 100, 120, 0, 255, 0, "", "", false) // update, no new name
 
 	c := w.Cells[1]
 	if c.X != 200 || c.Y != 100 || c.Radius != 120 {
@@ -113,7 +113,7 @@ func TestAddCellUpdatesExisting(t *testing.T) {
 
 func TestRemoveCell(t *testing.T) {
 	w := NewWorld()
-	w.AddCell(1, 0, 0, 50, 255, 255, 255, "", "")
+	w.AddCell(1, 0, 0, 50, 255, 255, 255, "", "", false)
 	w.MyCells = []uint32{1}
 	w.RemoveCell(1)
 
@@ -143,8 +143,8 @@ func TestAddMyCell(t *testing.T) {
 
 func TestClearAll(t *testing.T) {
 	w := NewWorld()
-	w.AddCell(1, 0, 0, 50, 0, 0, 0, "", "")
-	w.AddCell(2, 0, 0, 50, 0, 0, 0, "", "")
+	w.AddCell(1, 0, 0, 50, 0, 0, 0, "", "", false)
+	w.AddCell(2, 0, 0, 50, 0, 0, 0, "", "", false)
 	w.MyCells = []uint32{1}
 	w.ClearAll()
 
@@ -158,8 +158,8 @@ func TestClearAll(t *testing.T) {
 
 func TestClearMine(t *testing.T) {
 	w := NewWorld()
-	w.AddCell(1, 0, 0, 50, 0, 0, 0, "", "")
-	w.AddCell(2, 0, 0, 50, 0, 0, 0, "", "") // other player's cell
+	w.AddCell(1, 0, 0, 50, 0, 0, 0, "", "", false)
+	w.AddCell(2, 0, 0, 50, 0, 0, 0, "", "", false) // other player's cell
 	w.MyCells = []uint32{1}
 	w.ClearMine()
 
@@ -195,7 +195,7 @@ func TestCenter(t *testing.T) {
 	}
 
 	// single cell
-	w.AddCell(1, 100, 200, 50, 0, 0, 0, "", "")
+	w.AddCell(1, 100, 200, 50, 0, 0, 0, "", "", false)
 	w.MyCells = []uint32{1}
 	cx, cy = w.Center()
 	if cx != 100 || cy != 200 {
@@ -206,8 +206,8 @@ func TestCenter(t *testing.T) {
 func TestCenterMassWeighted(t *testing.T) {
 	w := NewWorld()
 	// Two cells of equal size → center is midpoint
-	w.AddCell(1, 0, 0, 10, 0, 0, 0, "", "")
-	w.AddCell(2, 100, 0, 10, 0, 0, 0, "", "")
+	w.AddCell(1, 0, 0, 10, 0, 0, 0, "", "", false)
+	w.AddCell(2, 100, 0, 10, 0, 0, 0, "", "", false)
 	w.MyCells = []uint32{1, 2}
 	cx, cy := w.Center()
 	if math.Abs(float64(cx-50)) > 0.1 || cy != 0 {
@@ -218,8 +218,8 @@ func TestCenterMassWeighted(t *testing.T) {
 func TestScore(t *testing.T) {
 	w := NewWorld()
 	// Score = sum(r*r/100) for my cells
-	w.AddCell(1, 0, 0, 100, 0, 0, 0, "", "") // 100*100/100 = 100
-	w.AddCell(2, 0, 0, 50, 0, 0, 0, "", "")  // 50*50/100 = 25
+	w.AddCell(1, 0, 0, 100, 0, 0, 0, "", "", false) // 100*100/100 = 100
+	w.AddCell(2, 0, 0, 50, 0, 0, 0, "", "", false)  // 50*50/100 = 25
 	w.MyCells = []uint32{1, 2}
 
 	if s := w.Score(); s != 125 {
@@ -232,9 +232,9 @@ func TestVisibleCells(t *testing.T) {
 	w.CamX, w.CamY, w.CamZoom = 0, 0, 1.0
 
 	// Cell at origin — visible in 100x100 screen
-	w.AddCell(1, 0, 0, 5, 0, 0, 0, "", "")
+	w.AddCell(1, 0, 0, 5, 0, 0, 0, "", "", false)
 	// Cell far away — not visible
-	w.AddCell(2, 10000, 10000, 5, 0, 0, 0, "", "")
+	w.AddCell(2, 10000, 10000, 5, 0, 0, 0, "", "", false)
 
 	visible := w.VisibleCells(100, 100)
 	if len(visible) != 1 || visible[0].ID != 1 {
@@ -246,9 +246,9 @@ func TestVisibleCellsSortedSmallToLarge(t *testing.T) {
 	w := NewWorld()
 	w.CamX, w.CamY, w.CamZoom = 0, 0, 0.1
 
-	w.AddCell(1, 0, 0, 200, 0, 0, 0, "", "")
-	w.AddCell(2, 0, 0, 50, 0, 0, 0, "", "")
-	w.AddCell(3, 0, 0, 100, 0, 0, 0, "", "")
+	w.AddCell(1, 0, 0, 200, 0, 0, 0, "", "", false)
+	w.AddCell(2, 0, 0, 50, 0, 0, 0, "", "", false)
+	w.AddCell(3, 0, 0, 100, 0, 0, 0, "", "", false)
 
 	visible := w.VisibleCells(800, 600)
 	if len(visible) != 3 {

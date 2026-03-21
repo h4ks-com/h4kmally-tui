@@ -159,6 +159,9 @@ func (c *Client) Split() tea.Cmd { return c.Send(c.proto.EncodeSplit()) }
 // Eject sends eject
 func (c *Client) Eject() tea.Cmd { return c.Send(c.proto.EncodeEject()) }
 
+// Chat sends a chat message
+func (c *Client) Chat(text string) tea.Cmd { return c.Send(c.proto.EncodeChat(text)) }
+
 // Close closes connection
 func (c *Client) Close() {
 	select {

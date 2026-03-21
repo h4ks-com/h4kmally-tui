@@ -1,3 +1,0 @@
-- chat on hit enter. Simple chat ui, keep movement in brackground. dialog. show messages live.
-- add plaer count url and etc to cloudbot command
-- bridge their chat to #sigmally

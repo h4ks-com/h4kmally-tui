@@ -11,13 +11,14 @@ type Border struct{ Left, Top, Right, Bottom float64 }
 
 // Cell represents a cell in the world
 type Cell struct {
-	ID     uint32
-	X, Y   float32
-	Radius float32
+	ID      uint32
+	X, Y    float32
+	Radius  float32
 	R, G, B uint8
-	Name   string
-	Skin   string
-	IsMine bool
+	Name    string
+	Skin    string
+	IsMine  bool
+	IsVirus bool
 }
 
 // LeaderEntry is one row on the leaderboard
@@ -49,17 +50,18 @@ func NewWorld() *World {
 }
 
 // AddCell adds or updates a cell from the new protocol format
-func (w *World) AddCell(id uint32, x, y int16, size uint16, r, g, b uint8, name, skin string) {
+func (w *World) AddCell(id uint32, x, y int16, size uint16, r, g, b uint8, name, skin string, isVirus bool) {
 	fx, fy := float32(x), float32(y)
 	radius := float32(size)
 	if c, ok := w.Cells[id]; ok {
 		c.X, c.Y, c.Radius = fx, fy, radius
 		c.R, c.G, c.B = r, g, b
+		c.IsVirus = isVirus
 		if name != "" {
 			c.Name = name
 		}
 	} else {
-		w.Cells[id] = &Cell{ID: id, X: fx, Y: fy, Radius: radius, R: r, G: g, B: b, Name: name, Skin: skin}
+		w.Cells[id] = &Cell{ID: id, X: fx, Y: fy, Radius: radius, R: r, G: g, B: b, Name: name, Skin: skin, IsVirus: isVirus}
 	}
 }
 

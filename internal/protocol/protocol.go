@@ -16,8 +16,9 @@ const (
 	OpMouseMove   = 16
 	OpSplit       = 17
 	OpEject       = 21
-	OpCaptcha     = 220
-	OpPing        = 254
+	OpChat    = 99
+	OpCaptcha = 220
+	OpPing    = 254
 )
 
 // Server opcodes
@@ -29,8 +30,9 @@ const (
 	OpAddMyCell     = 32
 	OpAddMultiCell  = 33
 	OpLeaderboardT  = 48
-	OpLeaderboard   = 49 // FFA leaderboard
-	OpBorder        = 64
+	OpLeaderboard = 49 // FFA leaderboard
+	OpChatRecv    = 99
+	OpBorder      = 64
 	OpSpawnResult   = 221
 	OpPingReply     = 254
 )
@@ -135,6 +137,16 @@ func (p *Protocol) EncodeCaptcha(token string) []byte {
 // EncodePing creates a ping message
 func (p *Protocol) EncodePing() []byte { return []byte{p.enc(OpPing)} }
 
+// EncodeChat creates a chat message
+func (p *Protocol) EncodeChat(text string) []byte {
+	b := make([]byte, 2+len(text)+1) // opcode + flags + text + null
+	b[0] = p.enc(OpChat)
+	b[1] = 0 // flags
+	copy(b[2:], text)
+	// last byte already 0
+	return b
+}
+
 // Message types from server
 type (
 	BorderMsg struct{ Left, Top, Right, Bottom float64 }
@@ -167,6 +179,12 @@ type (
 	ClearAllMsg     struct{}
 	ClearMineMsg    struct{}
 	PingReplyMsg    struct{}
+
+	ChatMsg struct {
+		R, G, B uint8
+		Name    string
+		Text    string
+	}
 
 	LeaderboardEntry struct {
 		Name         string
@@ -224,6 +242,8 @@ func (p *Protocol) DecodeMessage(data []byte) (interface{}, error) {
 		return p.decodeLeaderboard(payload)
 	case OpLeaderboardT:
 		return nil, nil // team leaderboard — not used, ignore cleanly
+	case OpChatRecv:
+		return p.decodeChatMsg(payload)
 	}
 	return nil, fmt.Errorf("unknown opcode %d", op)
 }
@@ -405,6 +425,23 @@ func (p *Protocol) decodeLeaderboard(d []byte) (LeaderboardMsg, error) {
 		})
 	}
 	return msg, nil
+}
+
+func (p *Protocol) decodeChatMsg(d []byte) (ChatMsg, error) {
+	// payload: flags(1) + R(1) + G(1) + B(1) + name\0 + text\0
+	if len(d) < 6 {
+		return ChatMsg{}, fmt.Errorf("chat too short")
+	}
+	r, g, b := d[1], d[2], d[3]
+	name, n, err := readString(d[4:])
+	if err != nil {
+		return ChatMsg{}, fmt.Errorf("chat name: %w", err)
+	}
+	text, _, err := readString(d[4+n:])
+	if err != nil {
+		return ChatMsg{}, fmt.Errorf("chat text: %w", err)
+	}
+	return ChatMsg{R: r, G: g, B: b, Name: name, Text: text}, nil
 }
 
 // readString reads a null-terminated UTF-8 string, returns (string, bytes_consumed, error).
