@@ -24,6 +24,11 @@ const (
 	stateError
 )
 
+// charAspect is the pixel height-to-width ratio of a typical monospace terminal
+// character (~2:1). Used to correct the circle rendering and mouse aim so that
+// cells appear round and horizontal/vertical movement feels equal speed.
+const charAspect = 2
+
 var dbg *log.Logger
 
 func init() {
@@ -80,7 +85,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		cmds := []tea.Cmd{tick()}
 		if m.state == statePlaying && m.w > 0 {
-			wx, wy := m.world.ToWorld(float32(m.mouseScreenX), float32(m.mouseScreenY), float32(m.w), float32(m.h))
+			vz := m.world.ViewZoom()
+			wx := m.world.CamX + (float32(m.mouseScreenX)-float32(m.w)/2)/vz
+			wy := m.world.CamY + (float32(m.mouseScreenY)-float32(m.h)/2)*charAspect/vz
 			cmds = append(cmds, m.client.Move(int32(wx), int32(wy)))
 		}
 		now := time.Now()
@@ -135,47 +142,70 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleKey dispatches to the active context: chat or game.
 func (m Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.chatMode {
-		switch msg.String() {
-		case "enter":
-			if m.chatInput != "" {
-				cmd := m.client.Chat(m.chatInput)
-				m.chatInput = ""
-				m.chatMode = false
-				return m, cmd
-			}
-			m.chatMode = false
-		case "esc":
-			m.chatInput = ""
-			m.chatMode = false
-		case "backspace":
-			if len(m.chatInput) > 0 {
-				m.chatInput = m.chatInput[:len(m.chatInput)-1]
-			}
-		default:
-			s := msg.String()
-			if len(s) == 1 && s[0] >= 32 && len(m.chatInput) < 100 {
-				m.chatInput += s
-			}
+		return m.handleChatKey(msg.String())
+	}
+	return m.handleGameKey(msg.String())
+}
+
+// handleChatKey runs while chat mode is active.
+// ALL keys are consumed here — game shortcuts have zero effect.
+// Only "enter" (send + exit) and "esc" (discard + exit) leave chat mode.
+func (m Model) handleChatKey(key string) (Model, tea.Cmd) {
+	switch key {
+	case "enter":
+		text := m.chatInput
+		m.chatInput = ""
+		m.chatMode = false
+		if text != "" && m.client != nil {
+			return m, m.client.Chat(text)
+		}
+		return m, nil
+	case "esc":
+		m.chatInput = ""
+		m.chatMode = false
+		return m, nil
+	case "backspace":
+		if len(m.chatInput) > 0 {
+			m.chatInput = m.chatInput[:len(m.chatInput)-1]
+		}
+		return m, nil
+	case "space":
+		// bubbletea names the spacebar "space", not " "
+		if len(m.chatInput) < 100 {
+			m.chatInput += " "
+		}
+		return m, nil
+	default:
+		// Accept single printable ASCII characters; ignore named keys
+		// (arrows, F-keys, ctrl+*, etc.) which have multi-char string forms.
+		if len(key) == 1 && key[0] >= 32 && len(m.chatInput) < 100 {
+			m.chatInput += key
 		}
 		return m, nil
 	}
+}
 
-	switch msg.String() {
+// handleGameKey runs while chat mode is inactive (normal gameplay).
+func (m Model) handleGameKey(key string) (Model, tea.Cmd) {
+	switch key {
 	case "ctrl+c", "q":
-		m.client.Close()
+		if m.client != nil {
+			m.client.Close()
+		}
 		return m, tea.Quit
 	case "space":
-		if m.state == statePlaying {
+		if m.state == statePlaying && m.client != nil {
 			return m, m.client.Split()
 		}
 	case "w":
-		if m.state == statePlaying {
+		if m.state == statePlaying && m.client != nil {
 			return m, m.client.Eject()
 		}
 	case "r":
-		if m.state == stateDead {
+		if m.state == stateDead && m.client != nil {
 			m.state = stateHandshake
 			return m, tea.Batch(m.client.Spawn(m.name), m.client.Read())
 		}
@@ -343,10 +373,14 @@ func (m Model) renderGame() string {
 	// Dynamic zoom: keeps player cell at a comfortable screen radius
 	zoom := m.world.ViewZoom()
 
-	visible := m.world.VisibleCellsZ(w, h, zoom)
+	// charAspect correction: fetch cells from a 2× taller frustum so cells
+	// near the top/bottom edge are not culled after Y-coordinate correction.
+	visible := m.world.VisibleCellsZ(w, h*charAspect, zoom)
 	for _, c := range visible {
 		sx := int((c.X-m.world.CamX)*zoom + float32(w)/2)
-		sy := int((c.Y-m.world.CamY)*zoom + float32(h)/2)
+		// Divide Y by charAspect so 1 world unit maps to the same visual
+		// distance in both axes (chars are ~2× taller than wide).
+		sy := int((c.Y-m.world.CamY)*zoom/charAspect + float32(h)/2)
 		sr := int(c.Radius * zoom)
 		if sr < 1 {
 			sr = 1
@@ -356,9 +390,11 @@ func (m Model) renderGame() string {
 			cr, cg, cb = avoidVirusGreen(cr, cg, cb)
 		}
 		ch := cellChar(sr, c.IsMine)
-		for dy := -sr; dy <= sr; dy++ {
+		// Ellipse: dx²+ (charAspect·dy)² ≤ sr² renders as a visual circle.
+		halfSr := (sr + charAspect - 1) / charAspect
+		for dy := -halfSr; dy <= halfSr; dy++ {
 			for dx := -sr; dx <= sr; dx++ {
-				if dx*dx+dy*dy <= sr*sr {
+				if dx*dx+charAspect*charAspect*dy*dy <= sr*sr {
 					px, py := sx+dx, sy+dy
 					if py >= 0 && py < h && px >= 0 && px < w {
 						buf[py][px] = pixel{ch: ch, r: cr, g: cg, b: cb, hasColor: true}
@@ -374,7 +410,7 @@ func (m Model) renderGame() string {
 			continue
 		}
 		sx := int((c.X-m.world.CamX)*zoom + float32(w)/2)
-		sy := int((c.Y-m.world.CamY)*zoom + float32(h)/2)
+		sy := int((c.Y-m.world.CamY)*zoom/charAspect + float32(h)/2)
 		sr := int(c.Radius * zoom)
 		if sr < 3 {
 			continue
@@ -471,8 +507,8 @@ func (m Model) stampBorder(buf [][]pixel, w, h int, zoom float32) {
 
 	leftX := int((float32(b.Left)-camX)*zoom + fw/2)
 	rightX := int((float32(b.Right)-camX)*zoom + fw/2)
-	topY := int((float32(b.Top)-camY)*zoom + fh/2)
-	botY := int((float32(b.Bottom)-camY)*zoom + fh/2)
+	topY := int((float32(b.Top)-camY)*zoom/charAspect + fh/2)
+	botY := int((float32(b.Bottom)-camY)*zoom/charAspect + fh/2)
 
 	// horizontal lines
 	for _, sy := range []int{topY, botY} {
