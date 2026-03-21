@@ -40,33 +40,38 @@ func main() {
 	} else {
 		// Normal mode: use real terminal
 		p = tea.NewProgram(m,
-			tea.WithWindowSize(80, 24),
+			tea.WithInput(os.Stdin),
+			tea.WithOutput(os.Stdout),
 		)
 	}
 
 	log.Printf("Running program...")
 
-	done := make(chan error, 1)
-	go func() {
-		_, err := p.Run()
-		done <- err
-	}()
+	if *test {
+		done := make(chan error, 1)
+		go func() {
+			_, err := p.Run()
+			done <- err
+		}()
 
-	// Wait for completion or timeout
-	select {
-	case err := <-done:
-		if err != nil {
-			log.Printf("Program error: %v", err)
-			if !*test {
+		select {
+		case err := <-done:
+			if err != nil {
+				log.Printf("Program error: %v", err)
 				os.Exit(1)
 			}
-		} else {
 			log.Printf("Program exited normally")
+		case <-time.After(10 * time.Second):
+			log.Printf("Timeout - sending quit")
+			p.Quit()
+			<-done
+			log.Printf("Quit complete")
 		}
-	case <-time.After(10 * time.Second):
-		log.Printf("Timeout - sending quit")
-		p.Quit()
-		<-done
-		log.Printf("Quit complete")
+	} else {
+		if _, err := p.Run(); err != nil {
+			log.Printf("Program error: %v", err)
+			os.Exit(1)
+		}
+		log.Printf("Program exited normally")
 	}
 }

@@ -1,4 +1,4 @@
-// Package protocol implements the SIG 0.0.1 binary WebSocket protocol
+// Package protocol implements the SIG 0.0.2 binary WebSocket protocol
 package protocol
 
 import (
@@ -8,26 +8,31 @@ import (
 	"math"
 )
 
-const ProtocolVersion = "SIG 0.0.1"
+const ProtocolVersion = "SIG 0.0.2"
 
 // Client opcodes
 const (
-	OpSpawn     = 0
-	OpMouseMove = 1
-	OpSplit     = 2
-	OpEject     = 3
-	OpCaptcha   = 220
+	OpSpawn       = 0
+	OpMouseMove   = 16
+	OpSplit       = 17
+	OpEject       = 21
+	OpCaptcha     = 220
+	OpPing        = 254
 )
 
 // Server opcodes
 const (
-	OpWorldUpdate  = 16
-	OpCamera       = 17
-	OpLeaderboard  = 49
-	OpBorder       = 64
-	OpAddMyCell    = 32
-	OpRemoveMyCell = 33
-	OpSpawnResult  = 221
+	OpWorldUpdate   = 16
+	OpCamera        = 17
+	OpClearAll      = 18
+	OpClearMine     = 20
+	OpAddMyCell     = 32
+	OpAddMultiCell  = 33
+	OpLeaderboardT  = 48
+	OpLeaderboard   = 49 // FFA leaderboard
+	OpBorder        = 64
+	OpSpawnResult   = 221
+	OpPingReply     = 254
 )
 
 // Protocol handles encoding/decoding with opcode shuffling
@@ -87,7 +92,8 @@ func (p *Protocol) dec(wire byte) byte {
 // SpawnPayload for spawn message
 type SpawnPayload struct {
 	Name          string `json:"name"`
-	Skin          string `json:"skin"`
+	Skin          string `json:"skin,omitempty"`
+	Effect        string `json:"effect,omitempty"`
 	ShowClanmates bool   `json:"showClanmates"`
 }
 
@@ -101,12 +107,12 @@ func (p *Protocol) EncodeSpawn(payload SpawnPayload) []byte {
 	return msg
 }
 
-// EncodeMouseMove creates move message
-func (p *Protocol) EncodeMouseMove(x, y float32) []byte {
+// EncodeMouseMove creates move message with i32 world coordinates
+func (p *Protocol) EncodeMouseMove(x, y int32) []byte {
 	msg := make([]byte, 9)
 	msg[0] = p.enc(OpMouseMove)
-	binary.LittleEndian.PutUint32(msg[1:5], math.Float32bits(x))
-	binary.LittleEndian.PutUint32(msg[5:9], math.Float32bits(y))
+	binary.LittleEndian.PutUint32(msg[1:5], uint32(x))
+	binary.LittleEndian.PutUint32(msg[5:9], uint32(y))
 	return msg
 }
 
@@ -126,13 +132,59 @@ func (p *Protocol) EncodeCaptcha(token string) []byte {
 	return msg
 }
 
+// EncodePing creates a ping message
+func (p *Protocol) EncodePing() []byte { return []byte{p.enc(OpPing)} }
+
 // Message types from server
 type (
-	BorderMsg       struct{ Left, Top, Right, Bottom float64 }
-	CameraMsg       struct{ X, Y, Zoom float32 }
-	Cell            struct{ ID uint32; X, Y, Radius float32; Color uint8; Name, Skin string }
-	WorldUpdateMsg  struct{ EatenCount uint16; AddCells []Cell; RemoveIDs []uint32 }
+	BorderMsg struct{ Left, Top, Right, Bottom float64 }
+	CameraMsg struct{ X, Y, Zoom float32 }
+
+	// Cell flags
+	EatEvent struct{ EaterID, EatenID uint32 }
+	Cell     struct {
+		ID           uint32
+		X, Y         int16
+		Size         uint16
+		IsVirus      bool
+		IsPlayer     bool
+		IsSubscriber bool
+		Clan         string
+		R, G, B      uint8
+		Skin         string
+		Name         string
+		Effect       string
+	}
+	WorldUpdateMsg struct {
+		EatEvents []EatEvent
+		AddCells  []Cell
+		RemoveIDs []uint32
+	}
+
 	SpawnResultMsg  struct{ Accepted bool }
+	AddMyCellMsg    struct{ ID uint32 }
+	AddMultiCellMsg struct{ ID uint32 }
+	ClearAllMsg     struct{}
+	ClearMineMsg    struct{}
+	PingReplyMsg    struct{}
+
+	LeaderboardEntry struct {
+		Name         string
+		Rank         uint32
+		IsMe         bool
+		IsSubscriber bool
+	}
+	LeaderboardMsg struct {
+		Entries []LeaderboardEntry
+	}
+)
+
+// Cell flag bits
+const (
+	FlagColor  = 0x02
+	FlagSkin   = 0x04
+	FlagName   = 0x08
+	FlagEffect = 0x10
 )
 
 // DecodeMessage decodes a server message
@@ -151,11 +203,27 @@ func (p *Protocol) DecodeMessage(data []byte) (interface{}, error) {
 	case OpWorldUpdate:
 		return p.decodeWorldUpdate(payload)
 	case OpAddMyCell:
-		return p.decodeAddMyCell(payload)
-	case OpRemoveMyCell:
-		return p.decodeRemoveMyCell(payload)
+		if len(payload) < 4 {
+			return nil, fmt.Errorf("AddMyCell too short")
+		}
+		return AddMyCellMsg{ID: binary.LittleEndian.Uint32(payload[0:4])}, nil
+	case OpAddMultiCell:
+		if len(payload) < 4 {
+			return nil, fmt.Errorf("AddMultiCell too short")
+		}
+		return AddMultiCellMsg{ID: binary.LittleEndian.Uint32(payload[0:4])}, nil
 	case OpSpawnResult:
 		return p.decodeSpawnResult(payload)
+	case OpClearAll:
+		return ClearAllMsg{}, nil
+	case OpClearMine:
+		return ClearMineMsg{}, nil
+	case OpPingReply:
+		return PingReplyMsg{}, nil
+	case OpLeaderboard:
+		return p.decodeLeaderboard(payload)
+	case OpLeaderboardT:
+		return nil, nil // team leaderboard — not used, ignore cleanly
 	}
 	return nil, fmt.Errorf("unknown opcode %d", op)
 }
@@ -183,20 +251,6 @@ func (p *Protocol) decodeCamera(d []byte) (CameraMsg, error) {
 	}, nil
 }
 
-func (p *Protocol) decodeAddMyCell(d []byte) (uint32, error) {
-	if len(d) < 4 {
-		return 0, fmt.Errorf("too short")
-	}
-	return binary.LittleEndian.Uint32(d[0:4]), nil
-}
-
-func (p *Protocol) decodeRemoveMyCell(d []byte) (uint32, error) {
-	if len(d) < 4 {
-		return 0, fmt.Errorf("too short")
-	}
-	return binary.LittleEndian.Uint32(d[0:4]), nil
-}
-
 func (p *Protocol) decodeSpawnResult(d []byte) (SpawnResultMsg, error) {
 	if len(d) < 1 {
 		return SpawnResultMsg{}, fmt.Errorf("too short")
@@ -209,92 +263,162 @@ func (p *Protocol) decodeWorldUpdate(d []byte) (WorldUpdateMsg, error) {
 	if len(d) < 2 {
 		return msg, nil
 	}
-	offset := 0
-	msg.EatenCount = binary.LittleEndian.Uint16(d[offset : offset+2])
-	offset += 2 + int(msg.EatenCount)*8
+	off := 0
 
-	for offset < len(d) {
-		cell, n, err := p.decodeCell(d[offset:])
-		if err != nil {
-			// Stop parsing on error, return what we have
+	// Section 1: eat events
+	eatCount := int(binary.LittleEndian.Uint16(d[off : off+2]))
+	off += 2
+	if off+eatCount*8 > len(d) {
+		return msg, fmt.Errorf("eat events overflow")
+	}
+	for i := 0; i < eatCount; i++ {
+		eater := binary.LittleEndian.Uint32(d[off : off+4])
+		eaten := binary.LittleEndian.Uint32(d[off+4 : off+8])
+		msg.EatEvents = append(msg.EatEvents, EatEvent{EaterID: eater, EatenID: eaten})
+		off += 8
+	}
+
+	// Section 2: cell updates until sentinel (cellId == 0)
+	for off+4 <= len(d) {
+		cellID := binary.LittleEndian.Uint32(d[off : off+4])
+		off += 4
+		if cellID == 0 {
 			break
 		}
-		if n <= 0 {
-			// Safety check
+		cell, n, err := p.decodeCell(d[off:], cellID)
+		if err != nil {
 			break
 		}
 		msg.AddCells = append(msg.AddCells, cell)
-		offset += n
+		off += n
+	}
+
+	// Section 3: removals
+	if off+2 <= len(d) {
+		removeCount := int(binary.LittleEndian.Uint16(d[off : off+2]))
+		off += 2
+		for i := 0; i < removeCount && off+4 <= len(d); i++ {
+			msg.RemoveIDs = append(msg.RemoveIDs, binary.LittleEndian.Uint32(d[off:off+4]))
+			off += 4
+		}
+	}
+
+	return msg, nil
+}
+
+func (p *Protocol) decodeCell(d []byte, id uint32) (Cell, int, error) {
+	// Need at least: i16 x + i16 y + u16 size + u8 flags + u8 isVirus + u8 isPlayer + u8 isSubscriber + clan(\0) = 10 bytes min
+	if len(d) < 10 {
+		return Cell{}, 0, fmt.Errorf("cell too short: %d", len(d))
+	}
+	c := Cell{ID: id}
+	off := 0
+
+	c.X = int16(binary.LittleEndian.Uint16(d[off : off+2]))
+	off += 2
+	c.Y = int16(binary.LittleEndian.Uint16(d[off : off+2]))
+	off += 2
+	c.Size = binary.LittleEndian.Uint16(d[off : off+2])
+	off += 2
+	flags := d[off]
+	off++
+	c.IsVirus = d[off] != 0
+	off++
+	c.IsPlayer = d[off] != 0
+	off++
+	c.IsSubscriber = d[off] != 0
+	off++
+
+	// clan string (null-terminated)
+	clan, n, err := readString(d[off:])
+	if err != nil {
+		return Cell{}, 0, fmt.Errorf("clan: %w", err)
+	}
+	c.Clan = clan
+	off += n
+
+	if flags&FlagColor != 0 {
+		if off+3 > len(d) {
+			return Cell{}, 0, fmt.Errorf("color overflow")
+		}
+		c.R, c.G, c.B = d[off], d[off+1], d[off+2]
+		off += 3
+	}
+	if flags&FlagSkin != 0 {
+		s, n, err := readString(d[off:])
+		if err != nil {
+			return Cell{}, 0, fmt.Errorf("skin: %w", err)
+		}
+		c.Skin = s
+		off += n
+	}
+	if flags&FlagName != 0 {
+		s, n, err := readString(d[off:])
+		if err != nil {
+			return Cell{}, 0, fmt.Errorf("name: %w", err)
+		}
+		c.Name = s
+		off += n
+	}
+	if flags&FlagEffect != 0 {
+		s, n, err := readString(d[off:])
+		if err != nil {
+			return Cell{}, 0, fmt.Errorf("effect: %w", err)
+		}
+		c.Effect = s
+		off += n
+	}
+
+	return c, off, nil
+}
+
+func (p *Protocol) decodeLeaderboard(d []byte) (LeaderboardMsg, error) {
+	msg := LeaderboardMsg{}
+	if len(d) < 4 {
+		return msg, nil
+	}
+	count := int(binary.LittleEndian.Uint32(d[0:4]))
+	off := 4
+	for i := 0; i < count && off < len(d); i++ {
+		if off+4 > len(d) {
+			break
+		}
+		isMe := binary.LittleEndian.Uint32(d[off:off+4]) != 0
+		off += 4
+		name, n, err := readString(d[off:])
+		if err != nil {
+			break
+		}
+		off += n
+		if off+8 > len(d) {
+			break
+		}
+		rank := binary.LittleEndian.Uint32(d[off : off+4])
+		off += 4
+		isSub := binary.LittleEndian.Uint32(d[off:off+4]) != 0
+		off += 4
+		msg.Entries = append(msg.Entries, LeaderboardEntry{
+			Name:         name,
+			Rank:         rank,
+			IsMe:         isMe,
+			IsSubscriber: isSub,
+		})
 	}
 	return msg, nil
 }
 
-func (p *Protocol) decodeCell(d []byte) (Cell, int, error) {
-	if len(d) < 15 {
-		return Cell{}, 0, fmt.Errorf("too short: %d bytes", len(d))
+// readString reads a null-terminated UTF-8 string, returns (string, bytes_consumed, error).
+// Caps search at 256 bytes — player names, clans, and skin names are never longer.
+func readString(d []byte) (string, int, error) {
+	if len(d) > 256 {
+		d = d[:256]
 	}
-	c := Cell{}
-	off := 0
-	
-	if off+4 > len(d) {
-		return Cell{}, 0, fmt.Errorf("unexpected end reading ID")
-	}
-	c.ID = binary.LittleEndian.Uint32(d[off : off+4])
-	off += 4
-	
-	if off+4 > len(d) {
-		return Cell{}, 0, fmt.Errorf("unexpected end reading X")
-	}
-	c.X = math.Float32frombits(binary.LittleEndian.Uint32(d[off : off+4]))
-	off += 4
-	
-	if off+4 > len(d) {
-		return Cell{}, 0, fmt.Errorf("unexpected end reading Y")
-	}
-	c.Y = math.Float32frombits(binary.LittleEndian.Uint32(d[off : off+4]))
-	off += 4
-	
-	if off+4 > len(d) {
-		return Cell{}, 0, fmt.Errorf("unexpected end reading Radius")
-	}
-	c.Radius = math.Float32frombits(binary.LittleEndian.Uint32(d[off : off+4]))
-	off += 4
-	
-	if off >= len(d) {
-		return Cell{}, 0, fmt.Errorf("unexpected end reading Color")
-	}
-	c.Color = d[off]
-	off++
-	
-	if off >= len(d) {
-		return Cell{}, 0, fmt.Errorf("unexpected end reading Flags")
-	}
-	flags := d[off]
-	off++
-
-	if flags&0x01 != 0 {
-		end := off
-		for end < len(d) && d[end] != 0 {
-			end++
+	for i, b := range d {
+		if b == 0 {
+			return string(d[:i]), i + 1, nil
 		}
-		if end >= len(d) {
-			return Cell{}, 0, fmt.Errorf("unexpected end reading Name")
-		}
-		c.Name = string(d[off:end])
-		off = end + 1
 	}
-	if flags&0x02 != 0 {
-		end := off
-		for end < len(d) && d[end] != 0 {
-			end++
-		}
-		if end >= len(d) {
-			return Cell{}, 0, fmt.Errorf("unexpected end reading Skin")
-		}
-		c.Skin = string(d[off:end])
-		off = end + 1
-	}
-	return c, off, nil
+	return "", 0, fmt.Errorf("unterminated string")
 }
 
 // IsReady returns true if handshake complete

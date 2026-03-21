@@ -4,6 +4,7 @@ package client
 import (
 	"crypto/tls"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -40,11 +41,6 @@ func New(url string) *Client {
 	}
 }
 
-// URL returns the server URL
-func (c *Client) URL() string {
-	return c.url
-}
-
 // Connect starts connection
 func (c *Client) Connect() tea.Cmd {
 	return func() tea.Msg {
@@ -52,11 +48,18 @@ func (c *Client) Connect() tea.Cmd {
 			HandshakeTimeout: 10 * time.Second,
 			TLSClientConfig: &tls.Config{
 				InsecureSkipVerify: false,
+				NextProtos:         []string{"http/1.1"},
 			},
 		}
 
-		conn, _, err := dialer.Dial(c.url, nil)
+		headers := http.Header{
+			"Origin": []string{"https://one.sigmally.com"},
+		}
+		conn, resp, err := dialer.Dial(c.url, headers)
 		if err != nil {
+			if resp != nil {
+				return DisconnectedMsg{Err: fmt.Errorf("dial failed (HTTP %d): %w", resp.StatusCode, err)}
+			}
 			return DisconnectedMsg{Err: fmt.Errorf("dial failed: %w", err)}
 		}
 
@@ -95,7 +98,10 @@ func (c *Client) readLoop() {
 
 			msg, err := c.proto.DecodeMessage(data)
 			if err != nil {
-				continue // Skip decode errors
+				continue // non-fatal; server may send unknown opcodes
+			}
+			if msg == nil {
+				continue // explicitly ignored opcode (e.g. team leaderboard)
 			}
 			c.msgs <- ServerMsg{Msg: msg}
 		}
@@ -139,10 +145,13 @@ func (c *Client) Captcha(token string) tea.Cmd {
 	return c.Send(c.proto.EncodeCaptcha(token))
 }
 
-// Move sends mouse position
-func (c *Client) Move(x, y float32) tea.Cmd {
+// Move sends mouse position (world coordinates as i32)
+func (c *Client) Move(x, y int32) tea.Cmd {
 	return c.Send(c.proto.EncodeMouseMove(x, y))
 }
+
+// Ping sends a ping
+func (c *Client) Ping() tea.Cmd { return c.Send(c.proto.EncodePing()) }
 
 // Split sends split
 func (c *Client) Split() tea.Cmd { return c.Send(c.proto.EncodeSplit()) }
@@ -157,7 +166,9 @@ func (c *Client) Close() {
 	default:
 		close(c.done)
 	}
+	c.mu.Lock()
 	if c.conn != nil {
 		c.conn.Close()
 	}
+	c.mu.Unlock()
 }

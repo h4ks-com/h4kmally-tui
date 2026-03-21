@@ -2,7 +2,9 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"time"
@@ -22,7 +24,10 @@ func main() {
 		HandshakeTimeout: 10 * time.Second,
 	}
 
-	conn, _, err := dialer.Dial(*server, nil)
+	headers := http.Header{
+		"Origin": []string{"https://one.sigmally.com"},
+	}
+	conn, _, err := dialer.Dial(*server, headers)
 	if err != nil {
 		log.Fatalf("Dial failed: %v", err)
 	}
@@ -104,11 +109,27 @@ func main() {
 			case protocol.CameraMsg:
 				log.Printf("[%d] CAMERA: X=%.1f Y=%.1f Zoom=%.3f", msgCount, v.X, v.Y, v.Zoom)
 			case protocol.WorldUpdateMsg:
-				log.Printf("[%d] WORLD_UPDATE: %d cells, eaten=%d", msgCount, len(v.AddCells), v.EatenCount)
-			case uint32:
-				log.Printf("[%d] ADD_MY_CELL: %d", msgCount, v)
+				log.Printf("[%d] WORLD_UPDATE: %d cells, %d eat events, %d removals", msgCount, len(v.AddCells), len(v.EatEvents), len(v.RemoveIDs))
+			case protocol.AddMyCellMsg:
+				log.Printf("[%d] ADD_MY_CELL: %d", msgCount, v.ID)
+			case protocol.AddMultiCellMsg:
+				log.Printf("[%d] ADD_MULTI_CELL: %d", msgCount, v.ID)
 			case protocol.SpawnResultMsg:
 				log.Printf("[%d] SPAWN_RESULT: accepted=%v", msgCount, v.Accepted)
+			case protocol.ClearAllMsg:
+				log.Printf("[%d] CLEAR_ALL", msgCount)
+			case protocol.ClearMineMsg:
+				log.Printf("[%d] CLEAR_MINE", msgCount)
+			case protocol.LeaderboardMsg:
+				names := make([]string, len(v.Entries))
+				for i, e := range v.Entries {
+					me := ""
+					if e.IsMe {
+						me = "*"
+					}
+					names[i] = fmt.Sprintf("%d.%s%s", e.Rank, me, e.Name)
+				}
+				log.Printf("[%d] LEADERBOARD(%d): %v", msgCount, len(v.Entries), names)
 			default:
 				log.Printf("[%d] Unknown message type: %T", msgCount, msg)
 			}

@@ -1,5 +1,7 @@
 # Binaries
 tui-agar
+debug-pty
+session-*.md
 *.exe
 *.exe~
 *.dll
@@ -24,3 +26,4 @@ go.work
 # OS
 .DS_Store
 Thumbs.db
+todo.txt
