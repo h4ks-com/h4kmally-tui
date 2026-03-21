@@ -265,10 +265,12 @@ func (m Model) center(text string) string {
 
 // pixel holds one terminal cell's content and color
 type pixel struct {
-	ch       rune
-	r, g, b  uint8
-	hasColor bool
-	bold     bool
+	ch             rune
+	r, g, b        uint8
+	bgR, bgG, bgB  uint8
+	hasColor       bool
+	hasBg          bool
+	bold           bool
 }
 
 func (m Model) renderGame() string {
@@ -306,6 +308,35 @@ func (m Model) renderGame() string {
 		}
 	}
 
+	// Stamp cell names on top of filled circles
+	for _, c := range visible {
+		if c.Name == "" {
+			continue
+		}
+		sx := int((c.X-m.world.CamX)*zoom + float32(w)/2)
+		sy := int((c.Y-m.world.CamY)*zoom + float32(h)/2)
+		sr := int(c.Radius * zoom)
+		if sr < 3 {
+			continue
+		}
+		name := c.Name
+		maxLen := 2*sr - 1
+		if len(name) > maxLen {
+			name = name[:maxLen]
+		}
+		label := " " + name + " "
+		startX := sx - len(label)/2
+		for i, ch := range label {
+			nx, ny := startX+i, sy
+			if ny >= 0 && ny < h && nx >= 0 && nx < w {
+				buf[ny][nx] = pixel{
+					ch: ch, r: 255, g: 255, b: 255, hasColor: true, bold: true,
+					bgR: 0, bgG: 0, bgB: 0, hasBg: true,
+				}
+			}
+		}
+	}
+
 	// World border, then overlays
 	m.stampBorder(buf, w, h, zoom)
 	m.stampLeaderboard(buf, w)
@@ -328,17 +359,24 @@ func (m Model) renderGame() string {
 	var b strings.Builder
 	for row := 0; row < h; row++ {
 		var lastR, lastG, lastB uint8
+		var lastBgR, lastBgG, lastBgB uint8
 		lastBold := false
 		colorActive := false
+		bgActive := false
 		for _, px := range buf[row] {
 			boldChanged := px.hasColor && px.bold != lastBold
-			colorChanged := px.hasColor && (!colorActive || px.r != lastR || px.g != lastG || px.b != lastB)
-			if colorActive && (!px.hasColor || boldChanged) {
+			if (colorActive && !px.hasColor) || (bgActive && !px.hasBg) || boldChanged {
 				b.WriteString("\x1b[0m")
 				colorActive = false
+				bgActive = false
 				lastBold = false
 			}
-			if px.hasColor && (colorChanged || boldChanged || !colorActive) {
+			if px.hasBg && (!bgActive || px.bgR != lastBgR || px.bgG != lastBgG || px.bgB != lastBgB) {
+				fmt.Fprintf(&b, "\x1b[48;2;%d;%d;%dm", px.bgR, px.bgG, px.bgB)
+				lastBgR, lastBgG, lastBgB = px.bgR, px.bgG, px.bgB
+				bgActive = true
+			}
+			if px.hasColor && (!colorActive || px.r != lastR || px.g != lastG || px.b != lastB || px.bold != lastBold) {
 				if px.bold {
 					fmt.Fprintf(&b, "\x1b[1;38;2;%d;%d;%dm", px.r, px.g, px.b)
 				} else {
@@ -350,7 +388,7 @@ func (m Model) renderGame() string {
 			}
 			b.WriteRune(px.ch)
 		}
-		if colorActive {
+		if colorActive || bgActive {
 			b.WriteString("\x1b[0m")
 		}
 		b.WriteByte('\n')
