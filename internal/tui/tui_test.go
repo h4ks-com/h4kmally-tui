@@ -40,12 +40,12 @@ func TestChat_GameKeysAreText(t *testing.T) {
 		key       string
 		wantInput string
 	}{
-		{"w", "w"},   // would eject in game
-		{"r", "r"},   // would respawn in game
-		{"q", "q"},   // would quit in game
-		{"a", "a"},   // plain letter
-		{"1", "1"},   // digit
-		{"!", "!"},   // punctuation
+		{"w", "w"}, // would eject in game
+		{"r", "r"}, // would respawn in game
+		{"q", "q"}, // would quit in game
+		{"a", "a"}, // plain letter
+		{"1", "1"}, // digit
+		{"!", "!"}, // punctuation
 	}
 	for _, tc := range cases {
 		m := chatModel("")

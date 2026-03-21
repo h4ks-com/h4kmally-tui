@@ -1,0 +1,20 @@
+#!/bin/sh
+set -e
+
+echo "→ gofmt"
+unformatted=$(gofmt -l .)
+if [ -n "$unformatted" ]; then
+  echo "These files need formatting (run 'make fmt'):"
+  echo "$unformatted"
+  exit 1
+fi
+
+echo "→ go vet"
+go vet ./...
+
+echo "→ golangci-lint"
+if command -v golangci-lint > /dev/null 2>&1; then
+  golangci-lint run ./...
+else
+  echo "golangci-lint not found, skipping (install from https://golangci-lint.run)"
+fi

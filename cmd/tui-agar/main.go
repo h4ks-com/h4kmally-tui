@@ -22,7 +22,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Cannot create log: %v", err)
 	}
-	defer logFile.Close()
 	log.SetOutput(logFile)
 
 	log.Printf("Starting client: server=%s name=%s test=%v", *server, *name, *test)

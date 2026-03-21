@@ -12,29 +12,29 @@ const ProtocolVersion = "SIG 0.0.2"
 
 // Client opcodes
 const (
-	OpSpawn       = 0
-	OpMouseMove   = 16
-	OpSplit       = 17
-	OpEject       = 21
-	OpChat    = 99
-	OpCaptcha = 220
-	OpPing    = 254
+	OpSpawn     = 0
+	OpMouseMove = 16
+	OpSplit     = 17
+	OpEject     = 21
+	OpChat      = 99
+	OpCaptcha   = 220
+	OpPing      = 254
 )
 
 // Server opcodes
 const (
-	OpWorldUpdate   = 16
-	OpCamera        = 17
-	OpClearAll      = 18
-	OpClearMine     = 20
-	OpAddMyCell     = 32
-	OpAddMultiCell  = 33
-	OpLeaderboardT  = 48
-	OpLeaderboard = 49 // FFA leaderboard
-	OpChatRecv    = 99
-	OpBorder      = 64
-	OpSpawnResult   = 221
-	OpPingReply     = 254
+	OpWorldUpdate  = 16
+	OpCamera       = 17
+	OpClearAll     = 18
+	OpClearMine    = 20
+	OpAddMyCell    = 32
+	OpAddMultiCell = 33
+	OpLeaderboardT = 48
+	OpLeaderboard  = 49 // FFA leaderboard
+	OpChatRecv     = 99
+	OpBorder       = 64
+	OpSpawnResult  = 221
+	OpPingReply    = 254
 )
 
 // Protocol handles encoding/decoding with opcode shuffling

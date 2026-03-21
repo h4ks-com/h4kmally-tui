@@ -31,7 +31,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Dial failed: %v", err)
 	}
-	defer conn.Close()
 	log.Printf("Connected!")
 
 	// Send handshake
@@ -72,7 +71,7 @@ func main() {
 	// Read messages for 10 seconds
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
-	
+
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 
@@ -86,7 +85,7 @@ func main() {
 			log.Printf("Interrupted - received %d messages", msgCount)
 			return
 		default:
-			conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+			_ = conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 			_, data, err := conn.ReadMessage()
 			if err != nil {
 				if websocket.IsCloseError(err, websocket.CloseNormalClosure) {
@@ -95,13 +94,13 @@ func main() {
 				}
 				continue
 			}
-			
+
 			msg, err := proto.DecodeMessage(data)
 			if err != nil {
 				log.Printf("Decode error: %v", err)
 				continue
 			}
-			
+
 			msgCount++
 			switch v := msg.(type) {
 			case protocol.BorderMsg:

@@ -65,7 +65,7 @@ func (c *Client) Connect() tea.Cmd {
 
 		c.conn = conn
 		if err := conn.WriteMessage(websocket.BinaryMessage, c.proto.Handshake()); err != nil {
-			conn.Close()
+			_ = conn.Close()
 			return DisconnectedMsg{Err: fmt.Errorf("handshake send failed: %w", err)}
 		}
 		go c.readLoop()
@@ -171,7 +171,7 @@ func (c *Client) Close() {
 	}
 	c.mu.Lock()
 	if c.conn != nil {
-		c.conn.Close()
+		_ = c.conn.Close()
 	}
 	c.mu.Unlock()
 }

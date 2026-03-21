@@ -351,12 +351,12 @@ type ChatMessage struct {
 
 // pixel holds one terminal cell's content and color
 type pixel struct {
-	ch             rune
-	r, g, b        uint8
-	bgR, bgG, bgB  uint8
-	hasColor       bool
-	hasBg          bool
-	bold           bool
+	ch            rune
+	r, g, b       uint8
+	bgR, bgG, bgB uint8
+	hasColor      bool
+	hasBg         bool
+	bold          bool
 }
 
 func (m Model) renderGame() string {
@@ -580,12 +580,13 @@ func (m Model) stampLeaderboard(buf [][]pixel, w int) {
 
 		var r, g, b uint8
 		bold := false
-		if e.IsMe {
+		switch {
+		case e.IsMe:
 			r, g, b = 50, 220, 100
 			bold = true
-		} else if e.IsSubscriber {
+		case e.IsSubscriber:
 			r, g, b = 200, 180, 0
-		} else {
+		default:
 			r, g, b = 200, 200, 200
 		}
 
@@ -791,4 +792,3 @@ func lbPanelWidth(lb []game.LeaderEntry) int {
 	// "N. name" + 2 padding
 	return maxName + 6
 }
-

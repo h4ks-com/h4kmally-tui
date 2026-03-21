@@ -1,0 +1,18 @@
+version: "2"
+
+formatters:
+  enable:
+    - gofmt
+
+  settings:
+    gofmt:
+      simplify: true
+
+linters:
+  default: standard
+  enable:
+    - misspell
+    - gocritic
+
+issues:
+  max-same-issues: 0
