@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"tui-agar/internal/game"
 )
@@ -210,6 +212,221 @@ func TestGame_EnterOnlyActivatesChatWhenPlaying(t *testing.T) {
 		got, _ := m.handleGameKey("enter")
 		if got.chatMode {
 			t.Errorf("state=%v: enter must not activate chat when not playing", s)
+		}
+	}
+}
+
+// --- wordWrap -----------------------------------------------------------------
+
+func TestWordWrap_Short(t *testing.T) {
+	got := wordWrap("hello", 10)
+	if len(got) != 1 || got[0] != "hello" {
+		t.Fatalf("want [hello], got %v", got)
+	}
+}
+
+func TestWordWrap_ExactWidth(t *testing.T) {
+	got := wordWrap("hello", 5)
+	if len(got) != 1 || got[0] != "hello" {
+		t.Fatalf("want [hello], got %v", got)
+	}
+}
+
+func TestWordWrap_OneBreak(t *testing.T) {
+	got := wordWrap("hello world", 7)
+	if len(got) != 2 || got[0] != "hello" || got[1] != "world" {
+		t.Fatalf("want [hello world], got %v", got)
+	}
+}
+
+func TestWordWrap_MultipleBreaks(t *testing.T) {
+	text := "one two three four five"
+	got := wordWrap(text, 9)
+	// Each line must be <= 9 chars; joining with spaces must round-trip.
+	for _, line := range got {
+		if len(line) > 9 {
+			t.Errorf("line %q exceeds maxWidth 9", line)
+		}
+	}
+	if strings.Join(got, " ") != text {
+		t.Errorf("round-trip failed: %q", strings.Join(got, " "))
+	}
+}
+
+func TestWordWrap_NoSpaces(t *testing.T) {
+	// A single token longer than maxWidth must be hard-split.
+	got := wordWrap("abcdefgh", 3)
+	for _, line := range got {
+		if len(line) > 3 {
+			t.Errorf("hard-split line %q exceeds 3", line)
+		}
+	}
+	if strings.Join(got, "") != "abcdefgh" {
+		t.Errorf("hard-split lost content: %v", got)
+	}
+}
+
+func TestWordWrap_Empty(t *testing.T) {
+	got := wordWrap("", 10)
+	if len(got) != 1 || got[0] != "" {
+		t.Fatalf("want [\"\"], got %v", got)
+	}
+}
+
+func TestWordWrap_ZeroWidth(t *testing.T) {
+	// maxWidth <= 0 returns the text unchanged in a single element.
+	got := wordWrap("hello world", 0)
+	if len(got) != 1 || got[0] != "hello world" {
+		t.Fatalf("want [hello world], got %v", got)
+	}
+}
+
+// --- stampChat pixel-buffer tests --------------------------------------------
+
+func makeTestBuf(w, h int) [][]pixel {
+	buf := make([][]pixel, h)
+	for i := range buf {
+		buf[i] = make([]pixel, w)
+		for j := range buf[i] {
+			buf[i][j] = pixel{ch: ' '}
+		}
+	}
+	return buf
+}
+
+func TestStampChat_ShortMessageSingleLine(t *testing.T) {
+	m := Model{
+		world: game.NewWorld(),
+		w:     80, h: 24,
+		chatMessages: []ChatMessage{
+			{Name: "alice", R: 200, G: 100, B: 50, Text: "hi", At: time.Now()},
+		},
+	}
+	buf := makeTestBuf(m.w, m.h)
+	m.stampChat(buf, m.w)
+
+	hintRow := m.h - 2
+	msgRow := hintRow - 1
+
+	// First char 'a' should be in name color, bold.
+	px := buf[msgRow][0]
+	if px.ch != 'a' {
+		t.Errorf("want 'a', got %q", px.ch)
+	}
+	if !px.bold {
+		t.Error("name char should be bold")
+	}
+	if px.r != 200 || px.g != 100 || px.b != 50 {
+		t.Errorf("name char should have name color, got (%d,%d,%d)", px.r, px.g, px.b)
+	}
+
+	// Char after "alice: " (7 chars) should be text color, not bold.
+	textPx := buf[msgRow][7]
+	if textPx.ch != 'h' {
+		t.Errorf("want 'h' at text start, got %q", textPx.ch)
+	}
+	if textPx.bold {
+		t.Error("text char should not be bold")
+	}
+	if textPx.r != 210 {
+		t.Errorf("text char should be grey (210), got r=%d", textPx.r)
+	}
+}
+
+func TestStampChat_LongMessageWraps(t *testing.T) {
+	longText := strings.Repeat("word ", 20) // 100 chars, far exceeds chatW-len("bob: ")
+	m := Model{
+		world: game.NewWorld(),
+		w:     80, h: 24,
+		chatMessages: []ChatMessage{
+			{Name: "bob", R: 0, G: 200, B: 200, Text: longText, At: time.Now()},
+		},
+	}
+	buf := makeTestBuf(m.w, m.h)
+	m.stampChat(buf, m.w)
+
+	hintRow := m.h - 2
+
+	// With wrapping the message should occupy at least 2 rows.
+	rowsWithContent := 0
+	for row := 0; row < hintRow; row++ {
+		for j := 0; j < 10; j++ {
+			if buf[row][j].ch != ' ' {
+				rowsWithContent++
+				break
+			}
+		}
+	}
+	if rowsWithContent < 2 {
+		t.Errorf("expected at least 2 message rows, got %d", rowsWithContent)
+	}
+}
+
+func TestStampChat_MessageCappedAtThreeLines(t *testing.T) {
+	// A very long single-message should produce at most maxLinesMsg=3 lines.
+	longText := strings.Repeat("x ", 200) // 400 chars, wraps into many lines
+	m := Model{
+		world: game.NewWorld(),
+		w:     80, h: 24,
+		chatMessages: []ChatMessage{
+			{Name: "a", R: 255, G: 255, B: 255, Text: longText, At: time.Now()},
+		},
+	}
+	buf := makeTestBuf(m.w, m.h)
+	m.stampChat(buf, m.w)
+
+	hintRow := m.h - 2
+	rowsWithContent := 0
+	for row := 0; row < hintRow; row++ {
+		for j := 0; j < 5; j++ {
+			if buf[row][j].ch != ' ' {
+				rowsWithContent++
+				break
+			}
+		}
+	}
+	if rowsWithContent > 3 {
+		t.Errorf("single message must produce at most 3 rows, got %d", rowsWithContent)
+	}
+}
+
+func TestStampChat_HintRowPreservedWhenChatInactive(t *testing.T) {
+	m := Model{
+		world:    game.NewWorld(),
+		w:        80,
+		h:        24,
+		chatMode: false,
+	}
+	buf := makeTestBuf(m.w, m.h)
+	m.stampChat(buf, m.w)
+
+	hintRow := m.h - 2
+	// "↵ chat" should appear at hintRow.
+	hint := "↵ chat"
+	for i, expected := range hint {
+		if buf[hintRow][i].ch != expected {
+			t.Errorf("hintRow[%d]: want %q, got %q", i, expected, buf[hintRow][i].ch)
+		}
+	}
+}
+
+func TestStampChat_NoMessagesOnlyHint(t *testing.T) {
+	m := Model{
+		world:    game.NewWorld(),
+		w:        80,
+		h:        24,
+		chatMode: false,
+	}
+	buf := makeTestBuf(m.w, m.h)
+	m.stampChat(buf, m.w)
+
+	hintRow := m.h - 2
+	// All rows above hintRow should remain blank (no messages).
+	for row := 0; row < hintRow; row++ {
+		for j := 0; j < 10; j++ {
+			if buf[row][j].ch != ' ' {
+				t.Errorf("row %d col %d: expected blank, got %q", row, j, buf[row][j].ch)
+			}
 		}
 	}
 }

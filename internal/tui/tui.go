@@ -366,7 +366,7 @@ func (m Model) renderGame() string {
 	for i := range buf {
 		buf[i] = make([]pixel, w)
 		for j := range buf[i] {
-			buf[i][j] = pixel{ch: ' '}
+			buf[i][j] = pixel{ch: ' ', hasBg: true}
 		}
 	}
 
@@ -674,9 +674,13 @@ func (m Model) stampMinimap(buf [][]pixel, w int) {
 }
 
 // stampChat draws the chat history and input row in the bottom-left corner.
+// Messages are word-wrapped up to maxLinesMsg lines each; total area is capped
+// at maxChatRows rows so the game world is not excessively covered.
 func (m Model) stampChat(buf [][]pixel, w int) {
 	const maxMsgs = 5
 	const chatW = 48
+	const maxLinesMsg = 3 // lines per message before truncation
+	const maxChatRows = 8 // total rows for the message area
 
 	now := time.Now()
 	recent := make([]ChatMessage, 0, maxMsgs)
@@ -689,25 +693,72 @@ func (m Model) stampChat(buf [][]pixel, w int) {
 		recent = recent[len(recent)-maxMsgs:]
 	}
 
-	// Row above the help bar is reserved for the input hint / active input
-	hintRow := m.h - 2
-	msgsStartRow := hintRow - len(recent)
+	// Flatten all messages into render lines.
+	type chatLine struct {
+		text                string
+		nameEndAt           int // chars that belong to the name label; -1 for continuations
+		nameR, nameG, nameB uint8
+	}
+	var allLines []chatLine
 
-	for i, cm := range recent {
+	for _, cm := range recent {
+		nameLabel := cm.Name + ": "
+		var msgLines []chatLine
+
+		if len(nameLabel) >= chatW {
+			// Name fills the full width — put it on its own line, text below.
+			label := nameLabel
+			if len(label) > chatW {
+				label = label[:chatW]
+			}
+			msgLines = append(msgLines, chatLine{
+				text: label, nameEndAt: len(label),
+				nameR: cm.R, nameG: cm.G, nameB: cm.B,
+			})
+			for _, tl := range wordWrap(cm.Text, chatW-2) {
+				msgLines = append(msgLines, chatLine{text: "  " + tl, nameEndAt: -1})
+			}
+		} else {
+			textWidth := chatW - len(nameLabel)
+			textLines := wordWrap(cm.Text, textWidth)
+			first := ""
+			if len(textLines) > 0 {
+				first = textLines[0]
+			}
+			msgLines = append(msgLines, chatLine{
+				text: nameLabel + first, nameEndAt: len(nameLabel),
+				nameR: cm.R, nameG: cm.G, nameB: cm.B,
+			})
+			for _, tl := range textLines[1:] {
+				// Continuation lines get a 2-space indent so they're distinct.
+				msgLines = append(msgLines, chatLine{text: "  " + tl, nameEndAt: -1})
+			}
+		}
+
+		if len(msgLines) > maxLinesMsg {
+			msgLines = msgLines[:maxLinesMsg]
+		}
+		allLines = append(allLines, msgLines...)
+	}
+
+	// Drop oldest lines if the area would be too tall.
+	if len(allLines) > maxChatRows {
+		allLines = allLines[len(allLines)-maxChatRows:]
+	}
+
+	hintRow := m.h - 2
+	msgsStartRow := hintRow - len(allLines)
+
+	for i, cl := range allLines {
 		row := msgsStartRow + i
 		if row < 0 || row >= m.h {
 			continue
 		}
-		nameLabel := cm.Name + ": "
-		full := nameLabel + cm.Text
-		if len(full) > chatW {
-			full = full[:chatW]
-		}
-		for j, ch := range full {
+		for j, ch := range cl.text {
 			var r, g, b uint8
 			bold := false
-			if j < len(nameLabel) {
-				r, g, b = cm.R, cm.G, cm.B
+			if cl.nameEndAt >= 0 && j < cl.nameEndAt {
+				r, g, b = cl.nameR, cl.nameG, cl.nameB
 				bold = true
 			} else {
 				r, g, b = 210, 210, 210
@@ -793,4 +844,42 @@ func lbPanelWidth(lb []game.LeaderEntry) int {
 	}
 	// "N. name" + 2 padding
 	return maxName + 6
+}
+
+// wordWrap splits text into lines of at most maxWidth bytes, breaking at word
+// boundaries. Single tokens longer than maxWidth are hard-split at the limit.
+func wordWrap(text string, maxWidth int) []string {
+	if maxWidth <= 0 || len(text) <= maxWidth {
+		return []string{text}
+	}
+	words := strings.Fields(text)
+	if len(words) == 0 {
+		return []string{""}
+	}
+	var lines []string
+	current := ""
+	for _, word := range words {
+		// Hard-split any token that alone exceeds maxWidth.
+		for len(word) > maxWidth {
+			if current != "" {
+				lines = append(lines, current)
+				current = ""
+			}
+			lines = append(lines, word[:maxWidth])
+			word = word[maxWidth:]
+		}
+		switch {
+		case current == "":
+			current = word
+		case len(current)+1+len(word) <= maxWidth:
+			current += " " + word
+		default:
+			lines = append(lines, current)
+			current = word
+		}
+	}
+	if current != "" {
+		lines = append(lines, current)
+	}
+	return lines
 }
